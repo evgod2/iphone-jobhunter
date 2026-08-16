@@ -1,44 +1,103 @@
 import os
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from mcp.server.fastmcp import FastMCP
 from jobspy import scrape_jobs
 import pandas as pd
 
-# Initialize FastMCP server
-mcp = FastMCP("iPhone-JobHunter")
+app = FastAPI(title="iPhone JobHunter MCP")
 
-@mcp.tool()
-def search_target_jobs(search_term: str, location: str = "Remote", results_wanted: int = 5) -> str:
-    """Scrapes live job boards using JobSpy based on search criteria."""
-    try:
-        jobs_df = scrape_jobs(
-            site_name=["indeed", "linkedin", "zip_recruiter"],
-            search_term=search_term,
-            location=location,
-            results_wanted=results_wanted,
-            hours_old=72
-        )
-        if jobs_df.empty:
-            return "No recent jobs found matching those parameters."
-        
-        summary_df = jobs_df[['site', 'title', 'company', 'location', 'job_url']]
-        return summary_df.to_json(orient="records")
-    except Exception as e:
-        return f"Error executing search: {str(e)}"
-
-# Wrap with FastAPI for Render web service compatibility
-app = FastAPI(title="iPhone JobHunter MCP Bridge")
-
+@app.get("/")
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+def health_check():
+    return {"status": "ok", "name": "iPhone-JobHunter"}
 
+@app.post("/")
 @app.post("/mcp")
 async def handle_mcp(request: Request):
-    payload = await request.json()
-    result = await mcp.handle_http(payload)
-    return JSONResponse(result)
+    try:
+        body = await request.json()
+        method = body.get("method")
+        msg_id = body.get("id")
+
+        # Handle MCP handshake / capabilities
+        if method == "initialize":
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "iPhone-JobHunter", "version": "1.0.0"}
+                }
+            })
+
+        # List available tools
+        elif method == "tools/list":
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "tools": [
+                        {
+                            "name": "search_target_jobs",
+                            "description": "Scrapes live job boards using JobSpy based on search criteria.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "search_term": {"type": "string", "description": "Job title or keywords"},
+                                    "location": {"type": "string", "description": "Location or Remote"},
+                                    "results_wanted": {"type": "integer", "description": "Number of results"}
+                                },
+                                "required": ["search_term"]
+                            }
+                        }
+                    ]
+                }
+            })
+
+        # Execute tool call
+        elif method == "tools/call":
+            params = body.get("params", {})
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+
+            if tool_name == "search_target_jobs":
+                search_term = arguments.get("search_term", "")
+                location = arguments.get("location", "Remote")
+                results_wanted = int(arguments.get("results_wanted", 5))
+
+                jobs_df = scrape_jobs(
+                    site_name=["indeed", "linkedin", "zip_recruiter"],
+                    search_term=search_term,
+                    location=location,
+                    results_wanted=results_wanted,
+                    hours_old=72
+                )
+                if jobs_df.empty:
+                    content = "No recent jobs found matching those parameters."
+                else:
+                    summary_df = jobs_df[['site', 'title', 'company', 'location', 'job_url']]
+                    content = summary_df.to_json(orient="records")
+
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "content": [{"type": "text", "text": content}]
+                    }
+                })
+
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "error": {"code": -32601, "message": "Method not found"}
+        })
+    except Exception as e:
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": body.get("id") if 'body' in locals() else None,
+            "error": {"code": -32603, "message": str(e)}
+        })
 
 if __name__ == "__main__":
     import uvicorn

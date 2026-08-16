@@ -1,7 +1,4 @@
-mcp[cli]>=1.0.0
 python-jobspy>=1.1.0
 pandas>=2.0.0
 uvicorn>=0.20.0
 fastapi>=0.100.0
-pydantic>=2.0.0
-starlette>=0.27.0

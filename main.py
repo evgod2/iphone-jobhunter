@@ -1,40 +1,31 @@
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from mcp.server.fastmcp import FastMCP
 from jobspy import scrape_jobs
 import pandas as pd
 
-app = FastAPI(title="iPhone JobHunter API")
+# Initialize FastMCP server with proper transport support
+mcp = FastMCP("iPhone-JobHunter")
 
-class SearchRequest(BaseModel):
-    search_term: str
-    location: str = "Remote"
-    results_wanted: int = 5
-
-@app.get("/")
-def health_check():
-    return {"status": "online", "service": "iPhone JobHunter MCP Bridge"}
-
-@app.post("/search")
-def search_jobs_endpoint(payload: SearchRequest):
-    """Direct API endpoint for searching jobs via JobSpy."""
+@mcp.tool()
+def search_target_jobs(search_term: str, location: str = "Remote", results_wanted: int = 5) -> str:
+    """Scrapes live job boards using JobSpy based on search criteria."""
     try:
         jobs_df = scrape_jobs(
             site_name=["indeed", "linkedin", "zip_recruiter"],
-            search_term=payload.search_term,
-            location=payload.location,
-            results_wanted=payload.results_wanted,
+            search_term=search_term,
+            location=location,
+            results_wanted=results_wanted,
             hours_old=72
         )
         if jobs_df.empty:
-            return {"results": "No recent jobs found matching those parameters."}
+            return "No recent jobs found matching those parameters."
         
         summary_df = jobs_df[['site', 'title', 'company', 'location', 'job_url']]
-        return {"results": summary_df.to_dict(orient="records")}
+        return summary_df.to_json(orient="records")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return f"Error executing search: {str(e)}"
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Run using Server-Sent Events (SSE) transport which custom apps expect
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
